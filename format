@@ -1,0 +1,165 @@
+#!/bin/bash
+
+# ==========================================
+#  LineageOS Builder CLI for OnePlus Nord CE4
+#  Codename: benz
+# ==========================================
+
+# --- Configuration ---
+DEVICE_CODENAME="benz"
+VENDOR_NAME="oneplus"
+ANDROID_BRANCH="lineage-21.0" # Android 14 (Adjust if building a different version)
+WORK_DIR="$HOME/android/lineage"
+LOG_FILE="$HOME/build_benz.log"
+
+# --- Colors for UI ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# --- Helper Functions ---
+
+log() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+    echo "[INFO] $1" >> "$LOG_FILE"
+}
+
+error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+    echo "[ERROR] $1" >> "$LOG_FILE"
+}
+
+success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+    echo "[SUCCESS] $1" >> "$LOG_FILE"
+}
+
+check_status() {
+    if [ $? -eq 0 ]; then
+        success "$1 completed successfully."
+    else
+        error "$1 failed. Check $LOG_FILE for details."
+        read -p "Press Enter to return to menu..."
+        return 1
+    fi
+}
+
+# --- Menu Functions ---
+
+setup_environment() {
+    log "Installing required build packages..."
+    sudo apt-get update
+    sudo apt-get install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev
+    
+    log "Installing Repo tool..."
+    mkdir -p ~/bin
+    curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+    chmod a+x ~/bin/repo
+    export PATH=~/bin:$PATH
+    
+    # Configure Git if not done
+    if [ -z "$(git config --global user.email)" ]; then
+        read -p "Enter Git Email: " git_email
+        read -p "Enter Git Name: " git_name
+        git config --global user.email "$git_email"
+        git config --global user.name "$git_name"
+    fi
+    
+    check_status "Environment Setup"
+}
+
+init_sync_repo() {
+    mkdir -p "$WORK_DIR"
+    cd "$WORK_DIR"
+    
+    log "Initializing LineageOS repo ($ANDROID_BRANCH)..."
+    repo init -u https://github.com/LineageOS/android.git -b "$ANDROID_BRANCH" --git-lfs
+    
+    log "Syncing repositories (This will take a long time)..."
+    repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
+    
+    check_status "Repo Sync"
+}
+
+configure_device_sources() {
+    cd "$WORK_DIR"
+    mkdir -p .repo/local_manifests
+    MANIFEST_FILE=".repo/local_manifests/benz.xml"
+
+    echo -e "${YELLOW}To build for 'benz', we need the device tree, kernel, and vendor blobs.${NC}"
+    echo -e "${YELLOW}Please verify the GitHub URLs below (Edit the script if you have custom sources).${NC}"
+    
+    # --- TEMPLATE FOR MANIFEST ---
+    # YOU MUST REPLACE THESE URLS WITH WORKING SOURCES FOR NORD CE4
+    cat > "$MANIFEST_FILE" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+    <project path="device/oneplus/benz" name="YOUR_GITHUB_USERNAME/device_oneplus_benz" remote="github" revision="$ANDROID_BRANCH" />
+    
+    <project path="vendor/oneplus/benz" name="YOUR_GITHUB_USERNAME/vendor_oneplus_benz" remote="github" revision="$ANDROID_BRANCH" />
+    
+    <project path="kernel/oneplus/benz" name="YOUR_GITHUB_USERNAME/kernel_oneplus_benz" remote="github" revision="$ANDROID_BRANCH" />
+    
+    <project path="device/oneplus/sm7550-common" name="YOUR_GITHUB_USERNAME/device_oneplus_sm7550-common" remote="github" revision="$ANDROID_BRANCH" />
+</manifest>
+EOF
+
+    echo -e "Created manifest at $MANIFEST_FILE"
+    echo -e "${RED}IMPORTANT: You must open $MANIFEST_FILE and ensure the 'name' attributes point to valid GitHub repositories for the Nord CE4.${NC}"
+    read -p "Press Enter after you have verified/edited the manifest file..."
+    
+    log "Resyncing to pull device sources..."
+    repo sync --force-sync
+    check_status "Device Source Sync"
+}
+
+build_rom() {
+    cd "$WORK_DIR"
+    
+    log "Setting up build environment..."
+    source build/envsetup.sh
+    
+    log "Lunching device..."
+    # Standard format: lineage_benz-userdebug or lineage_benz-ap2a-userdebug
+    lunch "lineage_${DEVICE_CODENAME}-userdebug"
+    
+    if [ $? -ne 0 ]; then
+        error "Lunch failed. Check if device tree exists in device/$VENDOR_NAME/$DEVICE_CODENAME"
+        return 1
+    fi
+
+    log "Starting Build (mka bacon)..."
+    mka bacon
+    
+    check_status "ROM Build"
+}
+
+# --- Main UI Loop ---
+
+while true; do
+    clear
+    echo -e "${BLUE}=========================================${NC}"
+    echo -e "${YELLOW}   LineageOS Builder: OnePlus Nord CE4 (benz)   ${NC}"
+    echo -e "${BLUE}=========================================${NC}"
+    echo -e "1. Install Dependencies & Setup Environment"
+    echo -e "2. Initialize & Sync LineageOS Repo"
+    echo -e "3. Configure Device Sources (Manifest)"
+    echo -e "4. Build ROM"
+    echo -e "5. Clean Build Directory (make clean)"
+    echo -e "6. Exit"
+    echo -e "${BLUE}=========================================${NC}"
+    read -p "Select an option: " choice
+
+    case $choice in
+        1) setup_environment ;;
+        2) init_sync_repo ;;
+        3) configure_device_sources ;;
+        4) build_rom ;;
+        5) cd "$WORK_DIR" && make clean && success "Cleaned" ;;
+        6) exit 0 ;;
+        *) echo "Invalid option." ;;
+    esac
+    read -p "Press Enter to continue..."
+done
